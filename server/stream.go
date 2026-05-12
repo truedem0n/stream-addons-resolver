@@ -37,10 +37,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	for _, rs := range streams {
 		s := rs.Stream
 		if rs.SourceName != "" {
+			suffix := "source_addon: " + rs.SourceName
 			if s.Description != "" {
-				s.Description += "\n" + rs.SourceName
+				s.Description += "\n" + suffix
 			} else {
-				s.Description = rs.SourceName
+				s.Description = suffix
 			}
 		}
 		out = append(out, s)
