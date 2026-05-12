@@ -1,0 +1,10 @@
+.git
+.gitignore
+cache/streams/
+cache/play/
+cache/meta/
+cache/stream_probe/
+config.json
+playbridge-stream-resolver
+stream-addons-resolver
+*.exe

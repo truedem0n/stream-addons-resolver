@@ -1,0 +1,14 @@
+services:
+  stream-resolver:
+    image: ghcr.io/truedem0n/stream-addons-resolver:latest
+    pull_policy: always
+    ports:
+      - "7001:7001"
+    volumes:
+      # config.json must exist before starting — copy from config.example.json
+      - ./config.json:/app/config.json
+      - cache:/app/cache
+    restart: unless-stopped
+
+volumes:
+  cache:
