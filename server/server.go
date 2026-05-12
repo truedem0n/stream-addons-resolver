@@ -9,19 +9,24 @@ import (
 
 	"github.com/truedem0n/playbridge-stream-resolver/cache"
 	"github.com/truedem0n/playbridge-stream-resolver/config"
+	"github.com/truedem0n/playbridge-stream-resolver/probecache"
 	"github.com/truedem0n/playbridge-stream-resolver/prober"
+	"github.com/truedem0n/playbridge-stream-resolver/ratelimit"
 )
 
 // Server holds all shared dependencies and registers HTTP routes.
 type Server struct {
-	mu          sync.RWMutex   // guards cfg and cfgPath
-	cfg         *config.Config
-	cfgPath     string         // path to config.json, for persisting changes
+	mu      sync.RWMutex // guards cfg and cfgPath
+	cfg     *config.Config
+	cfgPath string // path to config.json, for persisting changes
 
-	streamCache *cache.Store   // merged ranked stream list, keyed by "type/id"
-	playCache   *cache.Store   // resolved play URL, keyed by "type/id"
-	metaCache   *cache.Store   // OMDB runtime, keyed by "meta:imdbID"
+	streamCache *cache.Store // merged ranked stream list, keyed by "type/id"
+	playCache   *cache.Store // resolved play URL, keyed by "type/id"
+	metaCache   *cache.Store // OMDB runtime, keyed by "meta:imdbID"
 	inflight    *cache.InflightMap
+
+	probeCache *probecache.Cache // per-URL probe outcome cache (memory)
+	limiter    *ratelimit.Limiter
 }
 
 // New creates a Server, warns if probing is enabled but ffprobe is missing.
@@ -38,7 +43,14 @@ func New(cfg *config.Config, cfgPath string) *Server {
 		metaCache: cache.NewStore(cacheRoot, "meta",
 			time.Duration(cfg.Cache.MetaTTLSeconds)*time.Second),
 		inflight: cache.NewInflightMap(),
+		probeCache: probecache.New(
+			time.Duration(cfg.Probing.Cache.SuccessTTLSeconds)*time.Second,
+			time.Duration(cfg.Probing.Cache.FailureTTLSeconds)*time.Second,
+		),
+		limiter: ratelimit.New(),
 	}
+
+	s.applyRuntimeConfig()
 
 	if cfg.Probing.Enabled && !prober.Available() {
 		log.Println("[server] WARNING: probing is enabled but ffprobe was not found. " +
@@ -46,6 +58,26 @@ func New(cfg *config.Config, cfgPath string) *Server {
 	}
 
 	return s
+}
+
+// applyRuntimeConfig syncs runtime services (probe cache, limiter) with the
+// current s.cfg. Caller must hold s.mu (read or write) — this function only
+// reads cfg and pushes to internal services.
+func (s *Server) applyRuntimeConfig() {
+	s.probeCache.SetTTLs(
+		time.Duration(s.cfg.Probing.Cache.SuccessTTLSeconds)*time.Second,
+		time.Duration(s.cfg.Probing.Cache.FailureTTLSeconds)*time.Second,
+	)
+
+	profiles := make(map[string]ratelimit.ProfileConfig, len(s.cfg.RateLimitProfiles))
+	for name, p := range s.cfg.RateLimitProfiles {
+		profiles[name] = ratelimit.ProfileConfig{
+			PerMinute:     p.PerMinute,
+			PerHour:       p.PerHour,
+			MaxConcurrent: p.MaxConcurrent,
+		}
+	}
+	s.limiter.SyncProfiles(profiles)
 }
 
 // Handler returns the HTTP mux with all routes registered.
@@ -64,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/addons", s.handleGetAddons)
 	mux.HandleFunc("POST /api/addons", s.handleAddAddon)
 	mux.HandleFunc("PUT /api/addons", s.handleReorderAddons)
+	mux.HandleFunc("PATCH /api/addons", s.handlePatchAddon)
 	mux.HandleFunc("DELETE /api/addons", s.handleDeleteAddon)
 
 	// Cache management REST API
@@ -74,6 +107,10 @@ func (s *Server) Handler() http.Handler {
 	// Probing config REST API
 	mux.HandleFunc("GET /api/config/probing", s.handleGetProbingConfig)
 	mux.HandleFunc("PUT /api/config/probing", s.handleUpdateProbingConfig)
+
+	// Rate-limit profiles REST API
+	mux.HandleFunc("GET /api/config/rate-limits", s.handleGetRateLimits)
+	mux.HandleFunc("PUT /api/config/rate-limits", s.handleUpdateRateLimits)
 
 	// Streaming defaults REST API
 	mux.HandleFunc("GET /api/config/defaults", s.handleGetDefaults)
@@ -115,6 +152,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

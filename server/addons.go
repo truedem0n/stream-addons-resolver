@@ -117,6 +117,88 @@ func (s *Server) handleDeleteAddon(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handlePatchAddon serves PATCH /api/addons?url=<encoded-url>
+// Body: { "rate_limit_profile": "...", "skip_probe": true, "timeout_ms": 8000, "name": "...", "priority": 0 }
+// All fields are optional — only fields present in the JSON body are applied.
+func (s *Server) handlePatchAddon(w http.ResponseWriter, r *http.Request) {
+	targetURL := r.URL.Query().Get("url")
+	if targetURL == "" {
+		http.Error(w, "url query param is required", http.StatusBadRequest)
+		return
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	idx := -1
+	for i, a := range s.cfg.Addons {
+		if a.URL == targetURL {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		s.mu.Unlock()
+		http.Error(w, "addon not found", http.StatusNotFound)
+		return
+	}
+
+	if v, ok := raw["rate_limit_profile"]; ok {
+		var p string
+		if err := json.Unmarshal(v, &p); err != nil {
+			s.mu.Unlock()
+			http.Error(w, "invalid rate_limit_profile: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.cfg.Addons[idx].RateLimitProfile = p
+	}
+	if v, ok := raw["skip_probe"]; ok {
+		var b bool
+		if err := json.Unmarshal(v, &b); err != nil {
+			s.mu.Unlock()
+			http.Error(w, "invalid skip_probe: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.cfg.Addons[idx].SkipProbe = b
+	}
+	if v, ok := raw["timeout_ms"]; ok {
+		var n int
+		if err := json.Unmarshal(v, &n); err != nil || n <= 0 {
+			s.mu.Unlock()
+			http.Error(w, "timeout_ms must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		s.cfg.Addons[idx].TimeoutMs = n
+	}
+	if v, ok := raw["name"]; ok {
+		var name string
+		if err := json.Unmarshal(v, &name); err != nil {
+			s.mu.Unlock()
+			http.Error(w, "invalid name: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.cfg.Addons[idx].Name = name
+	}
+
+	updated := s.cfg.Addons[idx]
+	err := s.persistConfig()
+	s.mu.Unlock()
+
+	if err != nil {
+		log.Printf("[addons] failed to persist patch: %v", err)
+		http.Error(w, "addon updated but config could not be saved: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[addons] patched %s — profile:%q skip_probe:%v", updated.Name, updated.RateLimitProfile, updated.SkipProbe)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(updated)
+}
+
 // handleReorderAddons serves PUT /api/addons
 // Body: ["url1","url2",...] — full ordered list of addon URLs.
 // Resets priorities to match the new position (0 = first).

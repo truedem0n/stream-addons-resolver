@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/truedem0n/playbridge-stream-resolver/config"
+	"github.com/truedem0n/playbridge-stream-resolver/probecache"
 	"github.com/truedem0n/playbridge-stream-resolver/prober"
 	"github.com/truedem0n/playbridge-stream-resolver/resolver"
 	"github.com/truedem0n/playbridge-stream-resolver/types"
@@ -72,45 +74,19 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 
 	probingEnabled := probingCfg.Enabled && prober.Available()
 
+	// Build addon-name → addon lookup for fast skip_probe / profile resolution.
+	addonByName := make(map[string]config.SourceAddon, len(addons))
+	for _, a := range addons {
+		addonByName[a.Name] = a
+	}
+
 	// Fetch runtime concurrently with stream fetching.
 	runtimeCh := make(chan int, 1)
 	go func() { runtimeCh <- s.runtimeMins(imdbIDFromStremioID(id)) }()
 
-	// Pipeline: probe preferred candidates from each addon as it responds,
-	// rather than waiting for all addons before starting any probes.
-	type pResult struct {
-		url string
-		dur int
-		err error
-	}
-	resultCh := make(chan pResult, 300)
-	var probeWg sync.WaitGroup
-	probedURLs := make(map[string]bool)
-
-	launchProbe := func(url string) {
-		if !probingEnabled || prefs.ProbeOff || url == "" || probedURLs[url] {
-			return
-		}
-		probedURLs[url] = true
-		probeWg.Add(1)
-		go func() {
-			defer probeWg.Done()
-			d, err := prober.ProbeDuration(url, probingCfg.TimeoutMs)
-			resultCh <- pResult{url, d, err}
-		}()
-	}
-
-	var allStreams []types.RankedStream
-	for batch := range resolver.FetchAllChan(addons, itemType, id) {
-		allStreams = append(allStreams, batch...)
-		// Start probing preferred candidates from this batch immediately.
-		for _, rs := range batch {
-			if !isExcluded(rs, prefs) && isPreferred(rs, prefs) {
-				launchProbe(rs.Stream.URL)
-			}
-		}
-	}
-	log.Printf("[play] fetch done in %v — %d raw streams", time.Since(start), len(allStreams))
+	fetchStart := time.Now()
+	allStreams := resolver.FetchAll(addons, itemType, id)
+	log.Printf("[play] fetch done in %v — %d raw streams", time.Since(fetchStart), len(allStreams))
 
 	if len(allStreams) == 0 {
 		log.Printf("[play] no streams for %s/%s", itemType, id)
@@ -118,8 +94,9 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Final global rank and update stream cache.
+	rankStart := time.Now()
 	allStreams = resolver.Rank(allStreams, addons)
+	log.Printf("[play] ranked %d streams in %v", len(allStreams), time.Since(rankStart))
 	if !prefs.NoCache {
 		_ = s.streamCache.Set(itemType+"/"+id, allStreams)
 	}
@@ -131,7 +108,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 
 	doProbe := probingEnabled && !prefs.ProbeOff && expectedMins > 10
 
-	// Partition ranked streams, ensuring all preferred get a probe queued.
 	var preferred, fallback []playCandidate
 	for i := prefs.Skip; i < len(allStreams); i++ {
 		rs := allStreams[i]
@@ -148,9 +124,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		c := playCandidate{i, rs, url}
 		if isPreferred(rs, prefs) {
 			preferred = append(preferred, c)
-			if doProbe {
-				launchProbe(url) // no-op if already probing
-			}
 		} else {
 			fallback = append(fallback, c)
 		}
@@ -158,7 +131,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[play] partitioned: %d preferred, %d fallback", len(preferred), len(fallback))
 
-	// Debug mode: return candidates as JSON without probing or redirecting.
 	if prefs.Debug {
 		type debugEntry struct {
 			Idx        int    `json:"idx"`
@@ -186,12 +158,14 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 
 	if !doProbe {
 		for _, c := range preferred {
-			log.Printf("[play] no probing, using preferred stream %d from %s: %s", c.idx, c.rs.SourceName, c.rs.Stream.Name)
+			log.Printf("[play] no probing, using preferred stream %d from %s: %s",
+				c.idx, c.rs.SourceName, c.rs.Stream.Name)
 			cacheAndRedirect(s, w, r, playCacheKey, prefs.Skip, c.url)
 			return
 		}
 		for _, c := range fallback {
-			log.Printf("[play] no probing, using fallback stream %d from %s: %s", c.idx, c.rs.SourceName, c.rs.Stream.Name)
+			log.Printf("[play] no probing, using fallback stream %d from %s: %s",
+				c.idx, c.rs.SourceName, c.rs.Stream.Name)
 			cacheAndRedirect(s, w, r, playCacheKey, prefs.Skip, c.url)
 			return
 		}
@@ -200,131 +174,178 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Close resultCh once all in-flight probes finish.
-	go func() { probeWg.Wait(); close(resultCh) }()
-
-	earlyExit := probingCfg.EarlyExitEnabled()
-	probeStart := time.Now()
-	outcomes := make(map[string]pResult)
-
-	for res := range resultCh {
-		outcomes[res.url] = res
-		if res.err != nil {
-			log.Printf("[play] probe failed %s: %v", truncateURL(res.url), res.err)
-		} else {
-			log.Printf("[play] probe %s → %d min", truncateURL(res.url), res.dur)
-		}
-
-		if !earlyExit {
-			continue
-		}
-		// Scan preferred in rank order. Return the first passer once all
-		// higher-ranked streams have confirmed results (and failed).
-		for _, c := range preferred {
-			o, done := outcomes[c.url]
-			if !done {
-				break // higher-ranked stream still pending
-			}
-			if o.err != nil || o.dur == 0 || o.dur < expectedMins/2 {
-				continue // failed, check next
-			}
-			log.Printf("[play] early exit after %v — stream %d (%d min) from %s",
-				time.Since(probeStart), c.idx, o.dur, c.rs.SourceName)
-			cacheAndRedirect(s, w, r, playCacheKey, prefs.Skip, c.url)
-			return
-		}
+	if url, ok := s.probePass(r.Context(), preferred, addonByName, probingCfg, expectedMins, "preferred"); ok {
+		cacheAndRedirect(s, w, r, playCacheKey, prefs.Skip, url)
+		return
 	}
-
-	log.Printf("[play] probe pass [preferred] done in %v", time.Since(probeStart))
-
-	// No early exit — pick best from collected results.
-	for _, c := range preferred {
-		o := outcomes[c.url]
-		if o.err == nil && o.dur > 0 && o.dur >= expectedMins/2 {
-			log.Printf("[play] probe passed (%d min), using stream %d", o.dur, c.idx)
-			cacheAndRedirect(s, w, r, playCacheKey, prefs.Skip, c.url)
-			return
-		}
-	}
-
-	// Preferred all failed — probe fallback.
-	if len(fallback) > 0 {
-		log.Printf("[play] preferred pass exhausted, trying %d fallback streams", len(fallback))
-		if url, ok := probeFirst(fallback, probingCfg.TimeoutMs, expectedMins, "fallback", earlyExit); ok {
-			cacheAndRedirect(s, w, r, playCacheKey, prefs.Skip, url)
-			return
-		}
+	if url, ok := s.probePass(r.Context(), fallback, addonByName, probingCfg, expectedMins, "fallback"); ok {
+		cacheAndRedirect(s, w, r, playCacheKey, prefs.Skip, url)
+		return
 	}
 
 	log.Printf("[play] no working stream found for %s/%s", itemType, id)
 	http.Error(w, "no working stream found", http.StatusNotFound)
 }
 
-// probeFirst probes all candidates in parallel and returns the URL of the
-// highest-ranked candidate whose duration passes validation.
-// When earlyExit is true it returns as soon as the best possible winner is
-// confirmed, without waiting for remaining probes to finish.
-func probeFirst(candidates []playCandidate, timeoutMs, expectedMins int, pass string, earlyExit bool) (string, bool) {
+// candidateOutcome captures a single candidate's evaluation result.
+//
+//   - verified: probed-pass, cache-pass, or addon.skip_probe — eligible to return
+//   - unverified: rate-limited — eligible as a last-resort fallback
+//   - rejected: probe failed (network error or duration mismatch) — never used
+type candidateOutcome struct {
+	idx        int
+	verified   bool
+	unverified bool
+	rejected   bool
+	done       bool
+}
+
+// probePass evaluates the first MaxCandidates of `candidates` using the probe
+// cache, per-addon skip_probe flags, and per-profile rate limits.
+// Returns the URL of the highest-ranked usable stream, or ("", false) if none.
+func (s *Server) probePass(
+	ctx context.Context,
+	candidates []playCandidate,
+	addonByName map[string]config.SourceAddon,
+	probingCfg config.ProbingConfig,
+	expectedMins int,
+	pass string,
+) (string, bool) {
 	if len(candidates) == 0 {
 		return "", false
 	}
 
-	type result struct {
-		ci  int
-		dur int
-		err error
+	maxN := probingCfg.MaxCandidates
+	if maxN <= 0 {
+		maxN = 5
+	}
+	if len(candidates) > maxN {
+		log.Printf("[play] probe pass [%s] limiting to top %d of %d candidates",
+			pass, maxN, len(candidates))
+		candidates = candidates[:maxN]
 	}
 
+	earlyExit := probingCfg.EarlyExitEnabled()
 	probeStart := time.Now()
-	ch := make(chan result, len(candidates))
-	var wg sync.WaitGroup
-	for ci, c := range candidates {
-		wg.Add(1)
-		go func(ci int, c playCandidate) {
-			defer wg.Done()
-			log.Printf("[play] probing [%s %d/%d] %s (pos %d from %s)",
-				pass, ci+1, len(candidates), c.rs.Stream.Name, c.rs.SourcePos, c.rs.SourceName)
-			d, err := prober.ProbeDuration(c.url, timeoutMs)
-			ch <- result{ci, d, err}
-		}(ci, c)
-	}
-	go func() { wg.Wait(); close(ch) }()
+	timeoutMs := probingCfg.TimeoutMs
 
-	returned := make([]bool, len(candidates))
-	outcomes := make([]result, len(candidates))
+	outcomes := make([]candidateOutcome, len(candidates))
+	resultCh := make(chan candidateOutcome, len(candidates))
+	var probeWg sync.WaitGroup
 
-	for res := range ch {
-		returned[res.ci] = true
-		outcomes[res.ci] = res
-		if res.err != nil {
-			log.Printf("[play] probe failed [%s %d]: %v", pass, res.ci+1, res.err)
+	for i, c := range candidates {
+		i, c := i, c
+		outcomes[i].idx = i
+
+		// Cheapest path: cached outcome.
+		if cached, ok := s.probeCache.Get(c.url); ok {
+			res := candidateOutcome{idx: i, done: true}
+			if !cached.Failed() && cached.DurationMins >= expectedMins/2 {
+				res.verified = true
+				log.Printf("[play] cache ✓ [%s %d] %s (%d min)",
+					pass, i, truncateURL(c.url), cached.DurationMins)
+			} else {
+				res.rejected = true
+				log.Printf("[play] cache ✗ [%s %d] %s",
+					pass, i, truncateURL(c.url))
+			}
+			resultCh <- res
+			continue
 		}
+
+		a := addonByName[c.rs.SourceName]
+		if a.SkipProbe {
+			log.Printf("[play] skip_probe ✓ [%s %d] %s (addon=%s)",
+				pass, i, truncateURL(c.url), c.rs.SourceName)
+			resultCh <- candidateOutcome{idx: i, verified: true, done: true}
+			continue
+		}
+
+		probeWg.Add(1)
+		go func() {
+			defer probeWg.Done()
+			release, ok, reason := s.limiter.Acquire(ctx, a.RateLimitProfile)
+			if !ok {
+				log.Printf("[play] rate-limited [%s %d] %s (profile=%s reason=%s) — unverified",
+					pass, i, truncateURL(c.url), a.RateLimitProfile, reason)
+				resultCh <- candidateOutcome{idx: i, unverified: true, done: true}
+				return
+			}
+			defer release()
+
+			dur, err := prober.ProbeDuration(c.url, timeoutMs)
+			s.probeCache.Put(c.url, probecache.Outcome{
+				DurationMins: dur,
+				Err:          errString(err),
+				ProbedAt:     time.Now(),
+			})
+
+			res := candidateOutcome{idx: i, done: true}
+			if err == nil && dur > 0 && dur >= expectedMins/2 {
+				res.verified = true
+				log.Printf("[play] probe ✓ [%s %d] %s → %d min",
+					pass, i, truncateURL(c.url), dur)
+			} else {
+				res.rejected = true
+				if err != nil {
+					log.Printf("[play] probe ✗ [%s %d] %s: %v",
+						pass, i, truncateURL(c.url), err)
+				} else {
+					log.Printf("[play] probe ✗ [%s %d] %s → %d min (need ≥%d)",
+						pass, i, truncateURL(c.url), dur, expectedMins/2)
+				}
+			}
+			resultCh <- res
+		}()
+	}
+
+	go func() { probeWg.Wait(); close(resultCh) }()
+
+	for res := range resultCh {
+		outcomes[res.idx] = res
 		if !earlyExit {
 			continue
 		}
-		for ci := range candidates {
-			if !returned[ci] {
-				break // higher-ranked stream still pending
+		// Scan in rank order. If a higher-ranked candidate is still pending,
+		// hold off so we don't return a lower-ranked verified stream when a
+		// higher-ranked one might also pass.
+		for i := range outcomes {
+			o := outcomes[i]
+			if !o.done {
+				break
 			}
-			o := outcomes[ci]
-			if o.err != nil || o.dur == 0 || o.dur < expectedMins/2 {
-				continue // failed, check next
+			if o.verified {
+				log.Printf("[play] early exit [%s] after %v — stream %d (%s)",
+					pass, time.Since(probeStart), candidates[i].idx, candidates[i].rs.SourceName)
+				return candidates[i].url, true
 			}
-			log.Printf("[play] early exit [%s] after %v — stream %d (%d min) from %s",
-				pass, time.Since(probeStart), candidates[ci].idx, o.dur, candidates[ci].rs.SourceName)
-			return candidates[ci].url, true
 		}
 	}
 
 	log.Printf("[play] probe pass [%s] done in %v", pass, time.Since(probeStart))
 
-	for ci, o := range outcomes {
-		if o.err == nil && o.dur > 0 && o.dur >= expectedMins/2 {
-			log.Printf("[play] probe passed (%d min), using stream %d", o.dur, candidates[ci].idx)
-			return candidates[ci].url, true
+	// All probes resolved. Verified beats unverified beats nothing.
+	for i, o := range outcomes {
+		if o.verified {
+			log.Printf("[play] [%s] passed — stream %d", pass, candidates[i].idx)
+			return candidates[i].url, true
+		}
+	}
+	for i, o := range outcomes {
+		if o.unverified {
+			log.Printf("[play] [%s] fallback to unverified stream %d (rate-limited)",
+				pass, candidates[i].idx)
+			return candidates[i].url, true
 		}
 	}
 	return "", false
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // isExcluded returns true if the stream matches any excluded bucket in any dimension,
@@ -348,9 +369,6 @@ func isExcluded(rs types.RankedStream, p PlayPrefs) bool {
 	}
 
 	if len(p.SourceType.Excluded) > 0 {
-		// Skip "other" — unclassified streams should not be excludable by a
-		// blanket source-type rule. Users excluding everything unknown can do
-		// so explicitly via the exclude_words list.
 		st := detectedSourceType(s)
 		if st != "other" && containsCI(p.SourceType.Excluded, st) {
 			return true
@@ -378,8 +396,7 @@ func isExcluded(rs types.RankedStream, p PlayPrefs) bool {
 
 // isPreferred returns true if the stream matches all non-empty preferred buckets.
 // A dimension with no preferred values does not constrain the result, so when
-// every dimension is empty all non-excluded streams are treated as preferred
-// (pass 1 holds everything, pass 2 is empty) — equivalent to legacy behavior.
+// every dimension is empty all non-excluded streams are treated as preferred.
 func isPreferred(rs types.RankedStream, p PlayPrefs) bool {
 	s := rs.Stream
 
@@ -557,10 +574,10 @@ func qualityTier(s types.Stream) string {
 }
 
 func stripZeroWidth(s string) string {
-	r := strings.ReplaceAll(s, "‍", "")
-	r = strings.ReplaceAll(r, "‌", "")
-	r = strings.ReplaceAll(r, "​", "")
-	r = strings.ReplaceAll(r, "\ufeff", "")
+	r := strings.ReplaceAll(s, "‍", "") // ZWJ
+	r = strings.ReplaceAll(r, "‌", "")  // ZWNJ
+	r = strings.ReplaceAll(r, "​", "")  // ZWSP
+	r = strings.ReplaceAll(r, "\ufeff", "")  // BOM
 	return r
 }
 

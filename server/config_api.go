@@ -21,6 +21,8 @@ func (s *Server) handleGetFullConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdateFullConfig serves PUT /api/config — replaces the entire config.
+// Applies defaults and re-syncs runtime services (probe cache, rate limiter)
+// so a raw edit takes effect without restarting the server.
 func (s *Server) handleUpdateFullConfig(w http.ResponseWriter, r *http.Request) {
 	var incoming config.Config
 	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
@@ -28,8 +30,11 @@ func (s *Server) handleUpdateFullConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	config.ApplyDefaults(&incoming)
+
 	s.mu.Lock()
 	s.cfg = &incoming
+	s.applyRuntimeConfig()
 	err := s.persistConfig()
 	s.mu.Unlock()
 

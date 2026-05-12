@@ -183,6 +183,46 @@ func configurePage() string {
     .toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: #4caf50; }
     .notice { font-size: 0.75rem; color: #555; margin-top: 0.4rem; }
 
+    /* ── Addon row expansion (per-addon settings) ── */
+    .dnd-item-wrap { display: flex; flex-direction: column; gap: 0.3rem; }
+    .dnd-item.expanded { border-color: #3a3a3a; }
+    .dnd-settings {
+      background: #131313; border: 1px solid #232323; border-top: none;
+      border-radius: 0 0 8px 8px; padding: 0.6rem 0.75rem;
+      margin-top: -0.3rem;
+      display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;
+    }
+    .dnd-settings label { font-size: 0.75rem; color: #999; display: flex; align-items: center; gap: 0.4rem; }
+    .dnd-settings select, .dnd-settings input[type="number"] {
+      background: #0f0f0f; border: 1px solid #2a2a2a; color: #e0e0e0;
+      border-radius: 5px; padding: 0.25rem 0.4rem; font-size: 0.78rem; outline: none;
+    }
+    .btn-expand {
+      background: none; border: 1px solid transparent; color: #555;
+      border-radius: 6px; padding: 3px 8px; font-size: 0.78rem;
+      cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    }
+    .btn-expand:hover { border-color: #333; color: #aaa; }
+
+    /* ── Rate limit profile rows ── */
+    .rl-row {
+      display: grid; grid-template-columns: 1fr 90px 90px 90px auto;
+      gap: 0.5rem; align-items: center;
+      background: #1a1a1a; border: 1px solid #242424; border-radius: 8px;
+      padding: 0.4rem 0.6rem; margin-bottom: 0.35rem;
+    }
+    .rl-row input { width: 100%; }
+    .rl-name-input { font-weight: 500; }
+    .rl-head {
+      display: grid; grid-template-columns: 1fr 90px 90px 90px 60px;
+      gap: 0.5rem; font-size: 0.7rem; color: #555;
+      padding: 0 0.6rem; margin-bottom: 0.25rem;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .rl-add-form { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.6rem; }
+    .rl-add-form input { width: 110px; }
+    .rl-add-form .rl-name-input { width: auto; flex: 1; min-width: 140px; }
+
     /* Exclude word tags */
     .exclude-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; min-height: 1.5rem; }
     .exclude-tag {
@@ -519,9 +559,35 @@ func configurePage() string {
     <p class="status" id="cache-status"></p>
   </div>
 
+  <!-- Rate Limit Profiles -->
+  <div class="card">
+    <h2>Rate Limit Profiles</h2>
+    <p class="card-desc">Shared buckets for probe traffic. Addons referencing the same profile share its limits — e.g. AIOStreams and Meteor both backed by Torbox should share one profile. <code>0</code> in any field disables that dimension.</p>
+    <div class="rl-head">
+      <span>Name</span>
+      <span>per min</span>
+      <span>per hour</span>
+      <span>concurrent</span>
+      <span></span>
+    </div>
+    <div id="rl-list"><p class="empty">No profiles configured.</p></div>
+    <div style="display:flex;gap:0.4rem;margin:0.5rem 0;">
+      <button class="btn-save" onclick="saveRateLimitProfiles()">Save changes</button>
+    </div>
+    <div class="rl-add-form">
+      <input id="rl-new-name" type="text" class="rl-name-input" placeholder="Profile name (e.g. torbox)" />
+      <input id="rl-new-min" type="number" min="0" placeholder="per min" />
+      <input id="rl-new-hour" type="number" min="0" placeholder="per hour" />
+      <input id="rl-new-conc" type="number" min="0" placeholder="concurrent" />
+      <button class="btn-add" onclick="addRateLimitProfile()">Add</button>
+    </div>
+    <p class="status" id="rl-status"></p>
+  </div>
+
   <!-- Probing -->
   <div class="card">
     <h2>Probing</h2>
+    <p class="card-desc">ffprobe validates stream duration before redirect. Combined with the probe cache and rate-limit profiles, this stays friendly with debrid API quotas.</p>
     <div class="toggle-row">
       <span class="toggle-label">Enable probing</span>
       <label class="toggle">
@@ -536,17 +602,27 @@ func configurePage() string {
         <input type="checkbox" id="probing-early-exit" />
         <span class="toggle-slider"></span>
       </label>
-      <span style="font-size:0.775rem;color:#555;">Return as soon as the best available stream passes — don't wait for slower probes</span>
+      <span style="font-size:0.775rem;color:#555;">Return as soon as the best stream passes — don't wait for slower probes</span>
     </div>
     <div class="ttl-row">
-      <span class="ttl-label">Max attempts</span>
-      <input id="probing-max-attempts" class="ttl-input" type="number" min="1" placeholder="5" />
-      <span class="ttl-unit">streams</span>
+      <span class="ttl-label">Max candidates</span>
+      <input id="probing-max-candidates" class="ttl-input" type="number" min="1" placeholder="5" />
+      <span class="ttl-unit">top-N to probe per pass</span>
     </div>
     <div class="ttl-row">
       <span class="ttl-label">Probe timeout</span>
       <input id="probing-timeout" class="ttl-input" type="number" min="1" placeholder="15000" />
       <span class="ttl-unit">ms</span>
+    </div>
+    <div class="ttl-row">
+      <span class="ttl-label">Cache success TTL</span>
+      <input id="probing-cache-success" class="ttl-input" type="number" min="0" placeholder="3600" />
+      <span class="ttl-unit">seconds — how long passing probes are reused</span>
+    </div>
+    <div class="ttl-row">
+      <span class="ttl-label">Cache failure TTL</span>
+      <input id="probing-cache-failure" class="ttl-input" type="number" min="0" placeholder="600" />
+      <span class="ttl-unit">seconds — how long failed probes stay cached</span>
     </div>
     <div style="margin-top:0.75rem;">
       <button class="btn-save" onclick="saveProbingConfig()">Save</button>
@@ -657,22 +733,96 @@ func configurePage() string {
   // ── Source Addons ──────────────────────────────────────────────────────────
 
   function _makeAddonRow(a) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dnd-item-wrap';
+    wrap.dataset.url = a.url;
+
     const row = document.createElement('div');
     row.className = 'dnd-item';
     row.dataset.url = a.url;
+    const badges =
+      (a.skip_probe ? '<span class="badge" style="background:#2a1a1a;color:#c07070;">skip probe</span>' : '') +
+      (a.rate_limit_profile ? '<span class="badge" style="background:#1a2a3a;color:#7090c0;">' + esc(a.rate_limit_profile) + '</span>' : '');
     row.innerHTML =
       '<span class="dnd-handle">⠿</span>' +
       '<div class="dnd-info">' +
         '<div class="dnd-name">' + esc(a.name) + '</div>' +
         '<div class="dnd-url">'  + esc(a.url)  + '</div>' +
       '</div>' +
+      badges +
       '<span class="badge">' + (a.timeout_ms || 8000) + 'ms</span>' +
+      '<button class="btn-expand" onclick="toggleAddonSettings(\'' + esc(a.url) + '\')">Settings</button>' +
       '<button class="btn-remove" onclick="removeAddon(\'' + esc(a.url) + '\')">Remove</button>';
-    return row;
+
+    const settings = document.createElement('div');
+    settings.className = 'dnd-settings';
+    settings.style.display = 'none';
+    settings.dataset.url = a.url;
+    settings.innerHTML =
+      '<label>Rate-limit profile' +
+        '<select data-field="rate_limit_profile">' +
+          '<option value="">(none)</option>' +
+        '</select>' +
+      '</label>' +
+      '<label>Skip probe ' +
+        '<input type="checkbox" data-field="skip_probe" ' + (a.skip_probe ? 'checked' : '') + ' />' +
+      '</label>' +
+      '<label>Timeout (ms) ' +
+        '<input type="number" min="500" data-field="timeout_ms" value="' + (a.timeout_ms || 8000) + '" />' +
+      '</label>' +
+      '<button class="btn-save" onclick="saveAddonSettings(\'' + esc(a.url) + '\')">Save</button>';
+
+    wrap.appendChild(row);
+    wrap.appendChild(settings);
+
+    // Populate profile dropdown with current profiles + select current value.
+    const sel = settings.querySelector('select[data-field="rate_limit_profile"]');
+    Object.keys(_currentProfiles).sort().forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      if (a.rate_limit_profile === name) opt.selected = true;
+      sel.appendChild(opt);
+    });
+
+    return wrap;
+  }
+
+  function toggleAddonSettings(url) {
+    const wrap = document.querySelector('.dnd-item-wrap[data-url="' + cssEsc(url) + '"]');
+    if (!wrap) return;
+    const settings = wrap.querySelector('.dnd-settings');
+    const row = wrap.querySelector('.dnd-item');
+    const isOpen = settings.style.display !== 'none';
+    settings.style.display = isOpen ? 'none' : '';
+    row.classList.toggle('expanded', !isOpen);
+  }
+
+  function cssEsc(s) { return String(s).replace(/(["\\])/g, '\\$1'); }
+
+  async function saveAddonSettings(url) {
+    const wrap = document.querySelector('.dnd-item-wrap[data-url="' + cssEsc(url) + '"]');
+    if (!wrap) return;
+    const body = {
+      rate_limit_profile: wrap.querySelector('select[data-field="rate_limit_profile"]').value,
+      skip_probe:         wrap.querySelector('input[data-field="skip_probe"]').checked,
+      timeout_ms:         parseInt(wrap.querySelector('input[data-field="timeout_ms"]').value) || 8000,
+    };
+    const res = await fetch(API + '?url=' + encodeURIComponent(url), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      setStatus('addon-status', 'Addon settings saved.', true);
+      loadAddons();
+    } else {
+      setStatus('addon-status', 'Error: ' + (await res.text()).trim(), false);
+    }
   }
 
   async function _saveAddonOrder() {
-    const urls = [...document.querySelectorAll('#addon-list .dnd-item')].map(r => r.dataset.url);
+    const urls = [...document.querySelectorAll('#addon-list .dnd-item-wrap')].map(r => r.dataset.url);
     const res = await fetch(API, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -682,6 +832,8 @@ func configurePage() string {
   }
 
   async function loadAddons() {
+    // Load profiles first so the per-addon settings panel can populate its dropdown.
+    await loadRateLimitProfiles();
     const res = await fetch(API);
     const addons = await res.json();
     _refreshSourceRows(addons);
@@ -692,9 +844,9 @@ func configurePage() string {
     }
     el.innerHTML = '';
     addons.forEach(a => {
-      const row = _makeAddonRow(a);
-      wireDndShared(row, el, _saveAddonOrder);
-      el.appendChild(row);
+      const wrap = _makeAddonRow(a);
+      wireDndShared(wrap, el, _saveAddonOrder);
+      el.appendChild(wrap);
     });
   }
 
@@ -832,25 +984,127 @@ func configurePage() string {
     const res = await fetch(BASE + '/api/config/probing');
     if (!res.ok) return;
     const pc = await res.json();
-    document.getElementById('probing-enabled').checked    = pc.enabled      || false;
-    document.getElementById('probing-early-exit').checked = pc.early_exit !== false;
-    document.getElementById('probing-max-attempts').value = pc.max_attempts || '';
-    document.getElementById('probing-timeout').value      = pc.timeout_ms   || '';
+    document.getElementById('probing-enabled').checked       = pc.enabled        || false;
+    document.getElementById('probing-early-exit').checked    = pc.early_exit    !== false;
+    document.getElementById('probing-max-candidates').value  = pc.max_candidates || '';
+    document.getElementById('probing-timeout').value         = pc.timeout_ms     || '';
+    document.getElementById('probing-cache-success').value   = pc.success_ttl_seconds || '';
+    document.getElementById('probing-cache-failure').value   = pc.failure_ttl_seconds || '';
   }
 
   async function saveProbingConfig() {
     const body = {
-      enabled:      document.getElementById('probing-enabled').checked,
-      early_exit:   document.getElementById('probing-early-exit').checked,
-      max_attempts: parseInt(document.getElementById('probing-max-attempts').value) || 0,
-      timeout_ms:   parseInt(document.getElementById('probing-timeout').value)      || 0,
+      enabled:             document.getElementById('probing-enabled').checked,
+      early_exit:          document.getElementById('probing-early-exit').checked,
+      max_candidates:      parseInt(document.getElementById('probing-max-candidates').value) || 0,
+      timeout_ms:          parseInt(document.getElementById('probing-timeout').value)        || 0,
+      success_ttl_seconds: parseInt(document.getElementById('probing-cache-success').value)  || 0,
+      failure_ttl_seconds: parseInt(document.getElementById('probing-cache-failure').value)  || 0,
     };
+    // Drop zero values so the server doesn't reject them as "must be positive".
+    Object.keys(body).forEach(k => {
+      if (typeof body[k] === 'number' && body[k] === 0) delete body[k];
+    });
     const res = await fetch(BASE + '/api/config/probing', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     setStatus('probing-status', res.ok ? 'Saved.' : 'Error: ' + (await res.text()).trim(), res.ok);
     if (res.ok) loadProbingConfig();
+  }
+
+  // ── Rate Limit Profiles ────────────────────────────────────────────────────
+
+  let _currentProfiles = {};
+
+  async function loadRateLimitProfiles() {
+    const res = await fetch(BASE + '/api/config/rate-limits');
+    if (!res.ok) {
+      _currentProfiles = {};
+      return;
+    }
+    _currentProfiles = await res.json() || {};
+    _renderRateLimitList();
+  }
+
+  function _renderRateLimitList() {
+    const el = document.getElementById('rl-list');
+    const names = Object.keys(_currentProfiles).sort();
+    if (names.length === 0) {
+      el.innerHTML = '<p class="empty">No profiles configured.</p>';
+      return;
+    }
+    el.innerHTML = '';
+    names.forEach(name => {
+      const p = _currentProfiles[name];
+      const row = document.createElement('div');
+      row.className = 'rl-row';
+      row.dataset.name = name;
+      row.innerHTML =
+        '<input class="rl-name-input" type="text" value="' + esc(name) + '" data-field="name" />' +
+        '<input type="number" min="0" value="' + (p.per_minute || 0) + '" data-field="per_minute" />' +
+        '<input type="number" min="0" value="' + (p.per_hour || 0) + '" data-field="per_hour" />' +
+        '<input type="number" min="0" value="' + (p.max_concurrent || 0) + '" data-field="max_concurrent" />' +
+        '<button class="btn-remove" onclick="removeRateLimitProfile(\'' + esc(name) + '\')">×</button>';
+      el.appendChild(row);
+    });
+  }
+
+  function _collectRateLimitProfiles() {
+    const next = {};
+    document.querySelectorAll('#rl-list .rl-row').forEach(row => {
+      const name = row.querySelector('input[data-field="name"]').value.trim();
+      if (!name) return;
+      next[name] = {
+        per_minute:     parseInt(row.querySelector('input[data-field="per_minute"]').value)     || 0,
+        per_hour:       parseInt(row.querySelector('input[data-field="per_hour"]').value)       || 0,
+        max_concurrent: parseInt(row.querySelector('input[data-field="max_concurrent"]').value) || 0,
+      };
+    });
+    return next;
+  }
+
+  async function addRateLimitProfile() {
+    const name = document.getElementById('rl-new-name').value.trim();
+    if (!name) { setStatus('rl-status', 'Profile name is required.', false); return; }
+    const next = _collectRateLimitProfiles();
+    next[name] = {
+      per_minute:     parseInt(document.getElementById('rl-new-min').value)  || 0,
+      per_hour:       parseInt(document.getElementById('rl-new-hour').value) || 0,
+      max_concurrent: parseInt(document.getElementById('rl-new-conc').value) || 0,
+    };
+    await _saveRateLimitProfiles(next);
+    document.getElementById('rl-new-name').value = '';
+    document.getElementById('rl-new-min').value  = '';
+    document.getElementById('rl-new-hour').value = '';
+    document.getElementById('rl-new-conc').value = '';
+  }
+
+  async function removeRateLimitProfile(name) {
+    if (!confirm('Remove profile "' + name + '"? Addons referencing it will lose their limit.')) return;
+    const next = _collectRateLimitProfiles();
+    delete next[name];
+    await _saveRateLimitProfiles(next);
+  }
+
+  // Save all rate limit rows including in-place renames / edits.
+  async function saveRateLimitProfiles() {
+    await _saveRateLimitProfiles(_collectRateLimitProfiles());
+  }
+
+  async function _saveRateLimitProfiles(next) {
+    const res = await fetch(BASE + '/api/config/rate-limits', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    });
+    if (res.ok) {
+      _currentProfiles = await res.json() || {};
+      _renderRateLimitList();
+      setStatus('rl-status', 'Profiles saved.', true);
+      loadAddons(); // refresh dropdowns
+    } else {
+      setStatus('rl-status', 'Error: ' + (await res.text()).trim(), false);
+    }
   }
 
   // ── Bucket rows ───────────────────────────────────────────────────────────
@@ -1035,7 +1289,7 @@ func configurePage() string {
       const saved = await res.text();
       document.getElementById('raw-config').value = saved.trimEnd();
       setStatus('raw-config-status', 'Config saved.', true);
-      loadAddons(); loadMetaAddons(); loadCacheTTLs(); loadProbingConfig(); loadDefaults();
+      loadRateLimitProfiles(); loadAddons(); loadMetaAddons(); loadCacheTTLs(); loadProbingConfig(); loadDefaults();
     } else {
       setStatus('raw-config-status', 'Error: ' + (await res.text()).trim(), false);
     }
@@ -1046,6 +1300,7 @@ func configurePage() string {
   loadCacheTTLs();
   loadProbingConfig();
   loadDefaults();
+  // loadAddons already loads rate limit profiles first; no separate init needed.
 </script>
 </body>
 </html>`

@@ -1,4 +1,4 @@
 name: stream-resolver
 variables:
   - name: baseUrl
-    value: http://localhost:7001
+    value: http://192.168.1.24:7001

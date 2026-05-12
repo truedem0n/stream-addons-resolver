@@ -10,10 +10,12 @@ import (
 
 // SourceAddon is a configured upstream Stremio stream addon.
 type SourceAddon struct {
-	URL       string `json:"url"`
-	Name      string `json:"name"`
-	Priority  int    `json:"priority"`   // lower = higher priority in merge
-	TimeoutMs int    `json:"timeout_ms"` // per-addon HTTP timeout, default 8000
+	URL              string `json:"url"`
+	Name             string `json:"name"`
+	Priority         int    `json:"priority"`             // lower = higher priority in merge
+	TimeoutMs        int    `json:"timeout_ms"`           // per-addon HTTP timeout, default 8000
+	RateLimitProfile string `json:"rate_limit_profile,omitempty"` // profile name from RateLimitProfiles; empty = no limit
+	SkipProbe        bool   `json:"skip_probe,omitempty"` // true → addon's streams are accepted without probe validation
 }
 
 // MetaAddon is a Stremio meta addon used to look up runtime for probing validation.
@@ -24,18 +26,37 @@ type MetaAddon struct {
 	TimeoutMs int    `json:"timeout_ms"` // per-request HTTP timeout, default 5000
 }
 
+// ProbeCacheConfig controls TTLs for the in-memory probe outcome cache.
+// Failures get a shorter TTL than successes so transient debrid issues can recover.
+type ProbeCacheConfig struct {
+	SuccessTTLSeconds int `json:"success_ttl_seconds"` // default 3600
+	FailureTTLSeconds int `json:"failure_ttl_seconds"` // default 600
+}
+
 // ProbingConfig controls ffprobe-based stream validation.
 type ProbingConfig struct {
-	Enabled     bool  `json:"enabled"`
-	MaxAttempts int   `json:"max_attempts"` // kept for config compat; no longer caps parallel probing
-	TimeoutMs   int   `json:"timeout_ms"`   // per-probe ffprobe timeout, default 15000
-	EarlyExit   *bool `json:"early_exit,omitempty"` // return as soon as best passer confirmed; default true
+	Enabled       bool             `json:"enabled"`
+	MaxAttempts   int              `json:"max_attempts"`               // legacy field, kept for config compatibility
+	MaxCandidates int              `json:"max_candidates"`             // top-N candidates to consider per pass, default 5
+	TimeoutMs     int              `json:"timeout_ms"`                 // per-probe ffprobe timeout, default 15000
+	EarlyExit     *bool            `json:"early_exit,omitempty"`       // return as soon as best passer confirmed; default true
+	Cache         ProbeCacheConfig `json:"cache"`                      // probe outcome cache TTLs
 }
 
 // EarlyExitEnabled reports whether early-exit probing is on.
 // Defaults to true when the field is absent from config.
 func (p ProbingConfig) EarlyExitEnabled() bool {
 	return p.EarlyExit == nil || *p.EarlyExit
+}
+
+// RateLimitProfile defines limits shared by all addons referencing it by name.
+// Zero values disable that limit dimension. Multiple addons backed by the same
+// debrid service should share one profile so their probe traffic is bucketed
+// together rather than each getting an independent allowance.
+type RateLimitProfile struct {
+	PerMinute     int `json:"per_minute"`
+	PerHour       int `json:"per_hour"`
+	MaxConcurrent int `json:"max_concurrent"`
 }
 
 // CacheConfig controls TTLs for on-disk caches.
@@ -111,13 +132,14 @@ type DefaultsConfig struct {
 
 // Config is the top-level addon configuration.
 type Config struct {
-	Port       int            `json:"port"`        // HTTP listen port, default 7000
-	BaseURL    string         `json:"base_url"`    // public base URL e.g. http://localhost:7000
-	Addons     []SourceAddon  `json:"addons"`
-	MetaAddons []MetaAddon    `json:"meta_addons"` // used to fetch runtime for probing validation
-	Probing    ProbingConfig  `json:"probing"`
-	Cache      CacheConfig    `json:"cache"`
-	Defaults   DefaultsConfig `json:"defaults"`
+	Port              int                         `json:"port"`     // HTTP listen port, default 7000
+	BaseURL           string                      `json:"base_url"` // public base URL e.g. http://localhost:7000
+	Addons            []SourceAddon               `json:"addons"`
+	MetaAddons        []MetaAddon                 `json:"meta_addons"` // used to fetch runtime for probing validation
+	Probing           ProbingConfig               `json:"probing"`
+	Cache             CacheConfig                 `json:"cache"`
+	Defaults          DefaultsConfig              `json:"defaults"`
+	RateLimitProfiles map[string]RateLimitProfile `json:"rate_limit_profiles,omitempty"`
 }
 
 // Load reads and parses the config file at the given path, applying defaults
@@ -133,11 +155,13 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	applyDefaults(&cfg)
+	ApplyDefaults(&cfg)
 	return &cfg, nil
 }
 
-func applyDefaults(cfg *Config) {
+// ApplyDefaults fills in any zero-valued numeric fields with sensible defaults.
+// Safe to call multiple times — only zero values are touched.
+func ApplyDefaults(cfg *Config) {
 	if cfg.Port == 0 {
 		cfg.Port = 7000
 	}
@@ -166,8 +190,17 @@ func applyDefaults(cfg *Config) {
 	if cfg.Probing.MaxAttempts == 0 {
 		cfg.Probing.MaxAttempts = 5
 	}
+	if cfg.Probing.MaxCandidates == 0 {
+		cfg.Probing.MaxCandidates = 5
+	}
 	if cfg.Probing.TimeoutMs == 0 {
 		cfg.Probing.TimeoutMs = 15000
+	}
+	if cfg.Probing.Cache.SuccessTTLSeconds == 0 {
+		cfg.Probing.Cache.SuccessTTLSeconds = 3600
+	}
+	if cfg.Probing.Cache.FailureTTLSeconds == 0 {
+		cfg.Probing.Cache.FailureTTLSeconds = 600
 	}
 
 	if cfg.Cache.StreamListTTLSeconds == 0 {

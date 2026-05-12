@@ -6,17 +6,21 @@
       "url": "https://your-aiostreams-host/stremio/YOUR-UUID/YOUR-TOKEN/manifest.json",
       "name": "AIOStreams",
       "priority": 0,
-      "timeout_ms": 16000
-    },
-    {
-      "url": "https://your-hdhub-host/YOUR-CONFIG/manifest.json",
-      "name": "HdHub",
-      "priority": 1,
-      "timeout_ms": 8000
+      "timeout_ms": 16000,
+      "rate_limit_profile": "torbox",
+      "skip_probe": false
     },
     {
       "url": "https://your-meteor-host/YOUR-CONFIG/manifest.json",
       "name": "Meteor",
+      "priority": 1,
+      "timeout_ms": 8000,
+      "rate_limit_profile": "torbox",
+      "skip_probe": true
+    },
+    {
+      "url": "https://your-hdhub-host/YOUR-CONFIG/manifest.json",
+      "name": "HdHub",
       "priority": 2,
       "timeout_ms": 8000
     }
@@ -33,11 +37,22 @@
       "timeout_ms": 5000
     }
   ],
+  "rate_limit_profiles": {
+    "torbox": {
+      "per_minute": 8,
+      "per_hour": 50,
+      "max_concurrent": 3
+    }
+  },
   "probing": {
     "enabled": true,
-    "max_attempts": 5,
+    "max_candidates": 5,
     "timeout_ms": 15000,
-    "early_exit": true
+    "early_exit": true,
+    "cache": {
+      "success_ttl_seconds": 3600,
+      "failure_ttl_seconds": 600
+    }
   },
   "cache": {
     "stream_list_ttl_seconds": 300,
