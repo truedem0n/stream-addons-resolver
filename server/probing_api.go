@@ -11,6 +11,7 @@ type probingConfigResponse struct {
 	Enabled     bool `json:"enabled"`
 	MaxAttempts int  `json:"max_attempts"`
 	TimeoutMs   int  `json:"timeout_ms"`
+	EarlyExit   bool `json:"early_exit"`
 }
 
 // handleGetProbingConfig serves GET /api/config/probing
@@ -20,6 +21,7 @@ func (s *Server) handleGetProbingConfig(w http.ResponseWriter, r *http.Request) 
 		Enabled:     s.cfg.Probing.Enabled,
 		MaxAttempts: s.cfg.Probing.MaxAttempts,
 		TimeoutMs:   s.cfg.Probing.TimeoutMs,
+		EarlyExit:   s.cfg.Probing.EarlyExitEnabled(),
 	}
 	s.mu.RUnlock()
 
@@ -70,10 +72,21 @@ func (s *Server) handleUpdateProbingConfig(w http.ResponseWriter, r *http.Reques
 		s.cfg.Probing.TimeoutMs = n
 	}
 
+	if v, ok := raw["early_exit"]; ok {
+		var b bool
+		if err := json.Unmarshal(v, &b); err != nil {
+			s.mu.Unlock()
+			http.Error(w, "invalid value for early_exit: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.cfg.Probing.EarlyExit = &b
+	}
+
 	resp := probingConfigResponse{
 		Enabled:     s.cfg.Probing.Enabled,
 		MaxAttempts: s.cfg.Probing.MaxAttempts,
 		TimeoutMs:   s.cfg.Probing.TimeoutMs,
+		EarlyExit:   s.cfg.Probing.EarlyExitEnabled(),
 	}
 	err := s.persistConfig()
 	s.mu.Unlock()
@@ -84,8 +97,8 @@ func (s *Server) handleUpdateProbingConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	log.Printf("[probing] config updated — enabled:%v maxAttempts:%d timeoutMs:%d",
-		resp.Enabled, resp.MaxAttempts, resp.TimeoutMs)
+	log.Printf("[probing] config updated — enabled:%v maxAttempts:%d timeoutMs:%d earlyExit:%v",
+		resp.Enabled, resp.MaxAttempts, resp.TimeoutMs, resp.EarlyExit)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

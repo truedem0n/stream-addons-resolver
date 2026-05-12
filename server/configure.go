@@ -530,6 +530,14 @@ func configurePage() string {
       </label>
       <span style="font-size:0.775rem;color:#555;">Uses ffprobe to validate stream duration before playback</span>
     </div>
+    <div class="toggle-row">
+      <span class="toggle-label">Early exit</span>
+      <label class="toggle">
+        <input type="checkbox" id="probing-early-exit" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span style="font-size:0.775rem;color:#555;">Return as soon as the best available stream passes — don't wait for slower probes</span>
+    </div>
     <div class="ttl-row">
       <span class="ttl-label">Max attempts</span>
       <input id="probing-max-attempts" class="ttl-input" type="number" min="1" placeholder="5" />
@@ -825,6 +833,7 @@ func configurePage() string {
     if (!res.ok) return;
     const pc = await res.json();
     document.getElementById('probing-enabled').checked    = pc.enabled      || false;
+    document.getElementById('probing-early-exit').checked = pc.early_exit !== false;
     document.getElementById('probing-max-attempts').value = pc.max_attempts || '';
     document.getElementById('probing-timeout').value      = pc.timeout_ms   || '';
   }
@@ -832,6 +841,7 @@ func configurePage() string {
   async function saveProbingConfig() {
     const body = {
       enabled:      document.getElementById('probing-enabled').checked,
+      early_exit:   document.getElementById('probing-early-exit').checked,
       max_attempts: parseInt(document.getElementById('probing-max-attempts').value) || 0,
       timeout_ms:   parseInt(document.getElementById('probing-timeout').value)      || 0,
     };

@@ -58,6 +58,38 @@ func FetchAll(addons []config.SourceAddon, itemType, id string) []types.RankedSt
 	return all
 }
 
+// FetchAllChan is like FetchAll but sends each addon's ranked results to the
+// returned channel as soon as that addon responds, rather than waiting for all
+// addons. The channel is closed once every addon has responded or failed.
+// Use this when you want to start processing fast-addon results immediately.
+func FetchAllChan(addons []config.SourceAddon, itemType, id string) <-chan []types.RankedStream {
+	ch := make(chan []types.RankedStream, len(addons))
+	var wg sync.WaitGroup
+	for _, addon := range addons {
+		wg.Add(1)
+		go func(a config.SourceAddon) {
+			defer wg.Done()
+			streams, err := fetchAddonStreams(a, itemType, id)
+			if err != nil {
+				log.Printf("[fetcher] %s: %v", a.Name, err)
+				ch <- nil
+				return
+			}
+			ranked := make([]types.RankedStream, 0, len(streams))
+			for pos, s := range streams {
+				ranked = append(ranked, types.RankedStream{
+					Stream:     s,
+					SourceName: a.Name,
+					SourcePos:  pos,
+				})
+			}
+			ch <- ranked
+		}(addon)
+	}
+	go func() { wg.Wait(); close(ch) }()
+	return ch
+}
+
 func fetchAddonStreams(a config.SourceAddon, itemType, id string) ([]types.Stream, error) {
 	start := time.Now()
 	base := strings.TrimSuffix(strings.TrimSuffix(a.URL, "/"), "/manifest.json")

@@ -36,7 +36,8 @@
   "probing": {
     "enabled": true,
     "max_attempts": 5,
-    "timeout_ms": 15000
+    "timeout_ms": 15000,
+    "early_exit": true
   },
   "cache": {
     "stream_list_ttl_seconds": 300,

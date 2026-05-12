@@ -26,9 +26,16 @@ type MetaAddon struct {
 
 // ProbingConfig controls ffprobe-based stream validation.
 type ProbingConfig struct {
-	Enabled     bool `json:"enabled"`
-	MaxAttempts int  `json:"max_attempts"` // kept for config compat; no longer caps parallel probing
-	TimeoutMs   int  `json:"timeout_ms"`   // per-probe ffprobe timeout, default 15000
+	Enabled     bool  `json:"enabled"`
+	MaxAttempts int   `json:"max_attempts"` // kept for config compat; no longer caps parallel probing
+	TimeoutMs   int   `json:"timeout_ms"`   // per-probe ffprobe timeout, default 15000
+	EarlyExit   *bool `json:"early_exit,omitempty"` // return as soon as best passer confirmed; default true
+}
+
+// EarlyExitEnabled reports whether early-exit probing is on.
+// Defaults to true when the field is absent from config.
+func (p ProbingConfig) EarlyExitEnabled() bool {
+	return p.EarlyExit == nil || *p.EarlyExit
 }
 
 // CacheConfig controls TTLs for on-disk caches.
