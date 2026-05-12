@@ -1,0 +1,13 @@
+# compiled binaries
+playbridge-stream-resolver
+stream-addons-resolver
+*.exe
+
+# runtime cache
+cache/streams/
+cache/play/
+cache/meta/
+cache/stream_probe/
+
+# live config (contains secrets); use config.example.json as template
+config.json
