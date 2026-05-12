@@ -7,15 +7,11 @@ import (
 
 // handleConfigure serves GET /configure
 func (s *Server) handleConfigure(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	baseURL := s.cfg.BaseURL
-	s.mu.RUnlock()
-
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, configurePage(baseURL))
+	fmt.Fprint(w, configurePage())
 }
 
-func configurePage(baseURL string) string {
+func configurePage() string {
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -575,7 +571,7 @@ func configurePage(baseURL string) string {
 </div><!-- /container -->
 
 <script>
-  const BASE     = '` + baseURL + `';
+  const BASE     = window.location.origin;
   const API      = BASE + '/api/addons';
   const META_API = BASE + '/api/meta-addons';
 
