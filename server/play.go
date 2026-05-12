@@ -63,7 +63,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[play] %s/%s skip=%d prefs=%+v", itemType, id, prefs.Skip, prefs)
 
 	playCacheKey := itemType + "/" + id + prefsKey(prefs)
-	if prefs.Skip == 0 && !prefs.NoCache {
+	if prefs.Skip == 0 && !prefs.NoCache && !prefs.Debug {
 		var cachedURL string
 		if hit, _ := s.playCache.Get(playCacheKey, &cachedURL); hit && cachedURL != "" {
 			log.Printf("[play] cache hit → %s", truncateURL(cachedURL))
