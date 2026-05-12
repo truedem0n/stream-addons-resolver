@@ -35,7 +35,15 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// Convert RankedStream slice to plain Stream slice for Stremio response.
 	out := make([]types.Stream, 0, len(streams))
 	for _, rs := range streams {
-		out = append(out, rs.Stream)
+		s := rs.Stream
+		if rs.SourceName != "" {
+			if s.Description != "" {
+				s.Description += "\n" + rs.SourceName
+			} else {
+				s.Description = rs.SourceName
+			}
+		}
+		out = append(out, s)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
