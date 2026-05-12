@@ -1,9 +1,12 @@
 # ── Stage 1: build ────────────────────────────────────────────────────────────
 FROM golang:1.22-alpine AS builder
+ARG VERSION=dev
 WORKDIR /build
 COPY go.mod ./
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o stream-addons-resolver .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+    -ldflags="-s -w -X github.com/truedem0n/playbridge-stream-resolver/version.Version=${VERSION}" \
+    -o stream-addons-resolver .
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM alpine:3.21

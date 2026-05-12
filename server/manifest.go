@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/truedem0n/playbridge-stream-resolver/types"
+	"github.com/truedem0n/playbridge-stream-resolver/version"
 )
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
@@ -12,7 +13,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		ID:          "com.playbridge.stream-resolver",
 		Name:        "Stream Resolver",
 		Description: "Aggregates streams from multiple Stremio addons, ranks them, and validates with ffprobe.",
-		Version:     "1.0.0",
+		Version:     version.Version,
 		Resources:   []string{"stream"},
 		Types:       []string{"movie", "series"},
 		Catalogs:    []any{},
