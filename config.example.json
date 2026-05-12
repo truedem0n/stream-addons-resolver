@@ -3,22 +3,33 @@
   "base_url": "http://localhost:7001",
   "addons": [
     {
-      "url": "https://your-aiostreams-host/stremio/YOUR-UUID/YOUR-ENCRYPTED-PASSWORD",
+      "url": "https://your-aiostreams-host/stremio/YOUR-UUID/YOUR-TOKEN/manifest.json",
       "name": "AIOStreams",
       "priority": 0,
+      "timeout_ms": 16000
+    },
+    {
+      "url": "https://your-hdhub-host/YOUR-CONFIG/manifest.json",
+      "name": "HdHub",
+      "priority": 1,
       "timeout_ms": 8000
     },
     {
-      "url": "https://hdhub.example.com",
-      "name": "HDHub",
-      "priority": 1,
-      "timeout_ms": 5000
+      "url": "https://your-meteor-host/YOUR-CONFIG/manifest.json",
+      "name": "Meteor",
+      "priority": 2,
+      "timeout_ms": 8000
     }
   ],
   "meta_addons": [
     {
       "url": "https://v3-cinemeta.strem.io",
       "name": "Cinemeta",
+      "timeout_ms": 5000
+    },
+    {
+      "url": "https://your-aiometadata-host/stremio/YOUR-UUID/manifest.json",
+      "name": "AIOMetadata",
       "timeout_ms": 5000
     }
   ],
@@ -33,10 +44,23 @@
     "meta_ttl_seconds": 86400
   },
   "defaults": {
-    "quality": "",
-    "source_type": [],
-    "source": "",
-    "audio_lang": "",
+    "quality": {
+      "preferred": ["1080p"],
+      "excluded": []
+    },
+    "source_type": {
+      "preferred": ["web-dl", "webrip"],
+      "excluded": []
+    },
+    "source": {
+      "preferred": [],
+      "excluded": []
+    },
+    "audio_lang": {
+      "preferred": ["en", "multi"],
+      "excluded": []
+    },
+    "exclude_words": [],
     "min_size": 0,
     "max_size": 0,
     "min_bitrate": 0,
