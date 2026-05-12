@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/truedem0n/playbridge-stream-resolver/config"
@@ -46,6 +47,9 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing type or id", http.StatusBadRequest)
 		return
 	}
+
+	start := time.Now()
+	defer func() { log.Printf("[play] %s/%s total %v", itemType, id, time.Since(start)) }()
 
 	prefs := parsePlayPrefs(r)
 	s.mu.RLock()
@@ -178,6 +182,7 @@ func probeFirst(candidates []playCandidate, timeoutMs, expectedMins int, pass st
 		err          error
 	}
 
+	probeStart := time.Now()
 	results := make([]result, len(candidates))
 	var wg sync.WaitGroup
 	for ci, c := range candidates {
@@ -191,6 +196,7 @@ func probeFirst(candidates []playCandidate, timeoutMs, expectedMins int, pass st
 		}(ci, c)
 	}
 	wg.Wait()
+	log.Printf("[play] probe pass [%s] done in %v", pass, time.Since(probeStart))
 
 	for ci, res := range results {
 		c := candidates[ci]

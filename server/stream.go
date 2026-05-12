@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/truedem0n/playbridge-stream-resolver/resolver"
 	"github.com/truedem0n/playbridge-stream-resolver/types"
@@ -79,10 +80,13 @@ func (s *Server) getStreamList(itemType, id string) ([]types.RankedStream, error
 	}
 
 	// Fetch from all configured addons and rank.
+	fetchStart := time.Now()
 	raw := resolver.FetchAll(s.cfg.Addons, itemType, id)
-	ranked := resolver.Rank(raw, s.cfg.Addons)
+	log.Printf("[stream] fetch done in %v — %d raw streams", time.Since(fetchStart), len(raw))
 
-	log.Printf("[stream] fetched %d streams for %s, ranked to %d", len(raw), cacheKey, len(ranked))
+	rankStart := time.Now()
+	ranked := resolver.Rank(raw, s.cfg.Addons)
+	log.Printf("[stream] rank done in %v — %d streams after dedup", time.Since(rankStart), len(ranked))
 
 	if len(ranked) > 0 {
 		_ = s.streamCache.Set(cacheKey, ranked)

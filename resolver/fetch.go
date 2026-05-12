@@ -21,6 +21,7 @@ func FetchAll(addons []config.SourceAddon, itemType, id string) []types.RankedSt
 		streams []types.RankedStream
 	}
 
+	start := time.Now()
 	results := make([]result, len(addons))
 	var wg sync.WaitGroup
 
@@ -48,6 +49,7 @@ func FetchAll(addons []config.SourceAddon, itemType, id string) []types.RankedSt
 	}
 
 	wg.Wait()
+	log.Printf("[fetcher] all addons done in %v", time.Since(start))
 
 	var all []types.RankedStream
 	for _, r := range results {
@@ -57,6 +59,7 @@ func FetchAll(addons []config.SourceAddon, itemType, id string) []types.RankedSt
 }
 
 func fetchAddonStreams(a config.SourceAddon, itemType, id string) ([]types.Stream, error) {
+	start := time.Now()
 	base := strings.TrimSuffix(strings.TrimSuffix(a.URL, "/"), "/manifest.json")
 	url := fmt.Sprintf("%s/stream/%s/%s.json", base, itemType, id)
 
@@ -82,6 +85,6 @@ func fetchAddonStreams(a config.SourceAddon, itemType, id string) ([]types.Strea
 		return nil, fmt.Errorf("decoding response from %s: %w", a.Name, err)
 	}
 
-	log.Printf("[fetcher] %s: got %d streams for %s/%s", a.Name, len(sr.Streams), itemType, id)
+	log.Printf("[fetcher] %s: got %d streams in %v", a.Name, len(sr.Streams), time.Since(start))
 	return sr.Streams, nil
 }
