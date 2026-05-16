@@ -183,6 +183,15 @@ func (s *Server) handlePatchAddon(w http.ResponseWriter, r *http.Request) {
 		}
 		s.cfg.Addons[idx].Name = name
 	}
+	if v, ok := raw["disabled"]; ok {
+		var b bool
+		if err := json.Unmarshal(v, &b); err != nil {
+			s.mu.Unlock()
+			http.Error(w, "invalid disabled: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.cfg.Addons[idx].Disabled = b
+	}
 
 	updated := s.cfg.Addons[idx]
 	err := s.persistConfig()
@@ -194,7 +203,78 @@ func (s *Server) handlePatchAddon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[addons] patched %s — profile:%q skip_probe:%v", updated.Name, updated.RateLimitProfile, updated.SkipProbe)
+	log.Printf("[addons] patched %s — profile:%q skip_probe:%v disabled:%v",
+		updated.Name, updated.RateLimitProfile, updated.SkipProbe, updated.Disabled)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(updated)
+}
+
+// handleRefreshAddon serves POST /api/addons/refresh?url=<encoded-url>
+// Re-fetches the addon's manifest to verify reachability, updates the stored
+// name from the live manifest, and returns the updated addon. Leaves Disabled
+// state untouched — refresh is a probe, not a state change.
+func (s *Server) handleRefreshAddon(w http.ResponseWriter, r *http.Request) {
+	targetURL := r.URL.Query().Get("url")
+	if targetURL == "" {
+		http.Error(w, "url query param is required", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	var existing config.SourceAddon
+	found := false
+	for _, a := range s.cfg.Addons {
+		if a.URL == targetURL {
+			existing = a
+			found = true
+			break
+		}
+	}
+	s.mu.RUnlock()
+
+	if !found {
+		http.Error(w, "addon not found", http.StatusNotFound)
+		return
+	}
+
+	timeoutMs := existing.TimeoutMs
+	if timeoutMs == 0 {
+		timeoutMs = 8000
+	}
+	name, err := fetchManifest(existing.URL, timeoutMs)
+	if err != nil {
+		log.Printf("[addons] refresh failed for %s: %v", existing.URL, err)
+		http.Error(w, "manifest check failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	s.mu.Lock()
+	idx := -1
+	for i, a := range s.cfg.Addons {
+		if a.URL == targetURL {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		s.mu.Unlock()
+		http.Error(w, "addon not found", http.StatusNotFound)
+		return
+	}
+	if name != "" {
+		s.cfg.Addons[idx].Name = name
+	}
+	updated := s.cfg.Addons[idx]
+	persistErr := s.persistConfig()
+	s.mu.Unlock()
+
+	if persistErr != nil {
+		log.Printf("[addons] refresh persist failed: %v", persistErr)
+		http.Error(w, "refreshed but config could not be saved: "+persistErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[addons] refreshed %s (%s)", updated.Name, updated.URL)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updated)
 }

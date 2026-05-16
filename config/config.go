@@ -12,10 +12,11 @@ import (
 type SourceAddon struct {
 	URL              string `json:"url"`
 	Name             string `json:"name"`
-	Priority         int    `json:"priority"`             // lower = higher priority in merge
-	TimeoutMs        int    `json:"timeout_ms"`           // per-addon HTTP timeout, default 8000
+	Priority         int    `json:"priority"`                     // lower = higher priority in merge
+	TimeoutMs        int    `json:"timeout_ms"`                   // per-addon HTTP timeout, default 8000
 	RateLimitProfile string `json:"rate_limit_profile,omitempty"` // profile name from RateLimitProfiles; empty = no limit
-	SkipProbe        bool   `json:"skip_probe,omitempty"` // true → addon's streams are accepted without probe validation
+	SkipProbe        bool   `json:"skip_probe,omitempty"`         // true → addon's streams are accepted without probe validation
+	Disabled         bool   `json:"disabled,omitempty"`           // true → addon is configured but skipped during stream fetches
 }
 
 // MetaAddon is a Stremio meta addon used to look up runtime for probing validation.

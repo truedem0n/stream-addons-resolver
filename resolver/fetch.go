@@ -26,6 +26,10 @@ func FetchAll(addons []config.SourceAddon, itemType, id string) []types.RankedSt
 	var wg sync.WaitGroup
 
 	for i, addon := range addons {
+		if addon.Disabled {
+			log.Printf("[fetcher] %s: disabled, skipping", addon.Name)
+			continue
+		}
 		wg.Add(1)
 		go func(idx int, a config.SourceAddon) {
 			defer wg.Done()

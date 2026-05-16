@@ -98,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/addons", s.handleReorderAddons)
 	mux.HandleFunc("PATCH /api/addons", s.handlePatchAddon)
 	mux.HandleFunc("DELETE /api/addons", s.handleDeleteAddon)
+	mux.HandleFunc("POST /api/addons/refresh", s.handleRefreshAddon)
 
 	// Cache management REST API
 	mux.HandleFunc("DELETE /api/cache", s.handleClearCache)
@@ -142,7 +143,11 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("[server] Configure:  %s/configure", baseURL)
 	log.Printf("[server] Configured addons: %d", len(addons))
 	for _, a := range addons {
-		log.Printf("[server]   [priority %d] %s (%s)", a.Priority, a.Name, a.URL)
+		state := "enabled"
+		if a.Disabled {
+			state = "disabled"
+		}
+		log.Printf("[server]   [priority %d] %s (%s) — %s", a.Priority, a.Name, a.URL, state)
 	}
 	return http.ListenAndServe(addr, s.Handler())
 }
