@@ -79,6 +79,16 @@ func configurePage() string {
     }
     .dnd-item.dragging  { opacity: 0.35; }
     .dnd-item.drag-over { border-color: #4caf50; background: #1a241a; }
+    .dnd-item.addon-disabled .dnd-name,
+    .dnd-item.addon-disabled .dnd-url { opacity: 0.45; }
+    .dnd-item.addon-disabled { background: #161616; border-style: dashed; }
+    .btn-refresh {
+      background: none; border: 1px solid transparent; color: #5b7fa0;
+      border-radius: 6px; padding: 3px 8px; font-size: 0.75rem;
+      cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: all 0.15s;
+    }
+    .btn-refresh:hover { border-color: #2a5a8a; color: #7fb0d8; background: #101820; }
+    .btn-refresh:disabled { opacity: 0.4; cursor: wait; }
     .dnd-handle { color: #444; font-size: 1rem; line-height: 1; flex-shrink: 0; }
     .dnd-info   { flex: 1; min-width: 0; }
     .dnd-name   { font-size: 0.875rem; font-weight: 500; color: #ddd;
@@ -738,9 +748,10 @@ func configurePage() string {
     wrap.dataset.url = a.url;
 
     const row = document.createElement('div');
-    row.className = 'dnd-item';
+    row.className = 'dnd-item' + (a.disabled ? ' addon-disabled' : '');
     row.dataset.url = a.url;
     const badges =
+      (a.disabled ? '<span class="badge" style="background:#2a2a1a;color:#c0a060;">disabled</span>' : '') +
       (a.skip_probe ? '<span class="badge" style="background:#2a1a1a;color:#c07070;">skip probe</span>' : '') +
       (a.rate_limit_profile ? '<span class="badge" style="background:#1a2a3a;color:#7090c0;">' + esc(a.rate_limit_profile) + '</span>' : '');
     row.innerHTML =
@@ -752,6 +763,7 @@ func configurePage() string {
       badges +
       '<span class="badge">' + (a.timeout_ms || 8000) + 'ms</span>' +
       '<button class="btn-expand" onclick="toggleAddonSettings(\'' + esc(a.url) + '\')">Settings</button>' +
+      '<button class="btn-refresh" onclick="refreshAddon(\'' + esc(a.url) + '\', this)">Refresh</button>' +
       '<button class="btn-remove" onclick="removeAddon(\'' + esc(a.url) + '\')">Remove</button>';
 
     const settings = document.createElement('div');
@@ -766,6 +778,9 @@ func configurePage() string {
       '</label>' +
       '<label>Skip probe ' +
         '<input type="checkbox" data-field="skip_probe" ' + (a.skip_probe ? 'checked' : '') + ' />' +
+      '</label>' +
+      '<label>Disabled ' +
+        '<input type="checkbox" data-field="disabled" ' + (a.disabled ? 'checked' : '') + ' />' +
       '</label>' +
       '<label>Timeout (ms) ' +
         '<input type="number" min="500" data-field="timeout_ms" value="' + (a.timeout_ms || 8000) + '" />' +
@@ -806,6 +821,7 @@ func configurePage() string {
     const body = {
       rate_limit_profile: wrap.querySelector('select[data-field="rate_limit_profile"]').value,
       skip_probe:         wrap.querySelector('input[data-field="skip_probe"]').checked,
+      disabled:           wrap.querySelector('input[data-field="disabled"]').checked,
       timeout_ms:         parseInt(wrap.querySelector('input[data-field="timeout_ms"]').value) || 8000,
     };
     const res = await fetch(API + '?url=' + encodeURIComponent(url), {
@@ -818,6 +834,22 @@ func configurePage() string {
       loadAddons();
     } else {
       setStatus('addon-status', 'Error: ' + (await res.text()).trim(), false);
+    }
+  }
+
+  async function refreshAddon(url, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+    try {
+      const res = await fetch(API + '/refresh?url=' + encodeURIComponent(url), { method: 'POST' });
+      if (res.ok) {
+        const updated = await res.json();
+        setStatus('addon-status', 'Refreshed: ' + (updated.name || url), true);
+        loadAddons();
+      } else {
+        setStatus('addon-status', 'Refresh failed: ' + (await res.text()).trim(), false);
+      }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
     }
   }
 
